@@ -18,27 +18,27 @@ class IncidentRepository(Protocol):
     def update(self, incident_id: str, updates: dict) -> None:
         ...
 
+
 class JSONIncidentRepository:
-    def save(self, incident: Incident) -> None: 
-        try:
-            with open("incidents.json", "r") as file:
-                incidents = json.load(file)
-        except (FileNotFoundError, json.JSONDecodeError):
-            incidents = []
-        if isinstance(incidents, dict):
-            incidents = [incidents]
+    def save(self, incident: Incident) -> None:
+        incidents = self.load()
         incidents.append(incident.to_dict())
+
         with open("incidents.json", "w") as file:
-            json.dump( incidents, file, indent=4 )
+            json.dump(incidents, file, indent=4)
+
     def load(self) -> list[dict]:
         try:
             with open("incidents.json", "r") as file:
                 incidents = json.load(file)
-        except (FileNotFoundError, json.JSONDecodeError):
+        except FileNotFoundError:
             return []
+
         if isinstance(incidents, dict):
             incidents = [incidents]
+
         return incidents
+
     
     def get_by_id(self, incident_id: str) -> Incident | None:
         incidents = self.load()

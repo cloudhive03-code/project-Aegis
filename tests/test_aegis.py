@@ -393,10 +393,12 @@ def test_aegis_safe_log_file_skips_invalid_logs(tmp_path):
     log_file = tmp_path / "security.log"
 
     log_file.write_text(
-        "2026-08-30 12:00:00 INFO login successful user alice 192.168.1.20\n"
-        "invalid log entry\n"
-        "2026-08-30 12:05:00 WARNING login failed user bob 192.168.1.30\n"
-    )
+    "2026-08-30 12:00:00 INFO login successful user alice 192.168.1.20\n"
+    "\n"
+    "invalid log entry\n"
+    "   \n"
+    "2026-08-30 12:05:00 WARNING login failed user bob 192.168.1.30\n"
+)
 
     result = aegis.process_log_file_safe(str(log_file))
     incidents = result.incidents

@@ -1,6 +1,7 @@
 
 import json
 from incident import Incident
+import pytest
 from repos import JSONIncidentRepository
 
 def test_json_repository_preserves_multiple_incidents(tmp_path, monkeypatch):
@@ -285,3 +286,46 @@ def test_json_repository_converts_single_dict_to_list(tmp_path, monkeypatch):
     assert isinstance(incidents, list)
     assert len(incidents) == 1
     assert incidents[0]["id"] == "INC-028"
+
+
+def test_json_repository_raises_error_for_corrupted_file(
+    tmp_path,
+    monkeypatch
+):
+    repository = JSONIncidentRepository()
+    monkeypatch.chdir(tmp_path)
+
+    with open("incidents.json", "w") as file:
+        file.write('{"id": "INC-001", invalid json}')
+
+    with pytest.raises(json.JSONDecodeError):
+        repository.load()
+
+
+def test_json_repository_does_not_overwrite_corrupted_file(
+    tmp_path,
+    monkeypatch
+):
+    repository = JSONIncidentRepository()
+    monkeypatch.chdir(tmp_path)
+
+    corrupted_content = '{"id": "INC-001", invalid json}'
+
+    with open("incidents.json", "w") as file:
+        file.write(corrupted_content)
+
+    incident = Incident(
+        "INC-002",
+        "2026-08-29 20:00:00",
+        "WARNING",
+        "admin",
+        "192.168.1.20"
+    )
+
+    with pytest.raises(json.JSONDecodeError):
+        repository.save(incident)
+
+    with open("incidents.json", "r") as file:
+        saved_content = file.read()
+
+    assert saved_content == corrupted_content
