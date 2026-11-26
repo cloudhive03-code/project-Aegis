@@ -1,5 +1,6 @@
 
 import json
+import repos
 from incident import Incident
 import pytest
 from repos import JSONIncidentRepository
@@ -329,3 +330,57 @@ def test_json_repository_does_not_overwrite_corrupted_file(
         saved_content = file.read()
 
     assert saved_content == corrupted_content
+
+@pytest.mark.parametrize("operation", ["save", "update"])
+def test_repository_preserves_original_file_when_replace_fails(
+    tmp_path,
+    monkeypatch,
+    operation
+):
+    repository = JSONIncidentRepository()
+    monkeypatch.chdir(tmp_path)
+
+    original_incident = Incident(
+        "INC-030",
+        "2026-08-30 02:00:00",
+        "WARNING",
+        "admin",
+        "192.168.1.120"
+    )
+
+    repository.save(original_incident)
+
+    original_content = (tmp_path / "incidents.json").read_text(
+        encoding="utf-8"
+    )
+
+    def fail_replace(source, destination):
+        raise OSError("Simulated replacement failure")
+
+    monkeypatch.setattr(repos.os, "replace", fail_replace)
+
+    with pytest.raises(OSError, match="Simulated replacement failure"):
+        if operation == "save":
+            repository.save(
+                Incident(
+                    "INC-031",
+                    "2026-08-30 02:05:00",
+                    "CRITICAL",
+                    "root",
+                    "192.168.1.130"
+                )
+            )
+        else:
+            repository.update(
+                "INC-030",
+                {"status": "Investigating"}
+            )
+
+    saved_content = (tmp_path / "incidents.json").read_text(
+        encoding="utf-8"
+    )
+
+    assert saved_content == original_content
+
+    temporary_files = list(tmp_path.glob(".incidents.*.tmp"))
+    assert temporary_files == []

@@ -1,5 +1,8 @@
 
+
 import json
+import os
+import tempfile
 from typing import Protocol
 
 from incident import Incident
@@ -8,29 +11,59 @@ from incident import Incident
 class IncidentRepository(Protocol):
     def save(self, incident: Incident) -> None:
         ...
-    
+
     def load(self) -> list[dict]:
         ...
-        
+
     def get_by_id(self, incident_id: str) -> Incident | None:
         ...
-        
+
     def update(self, incident_id: str, updates: dict) -> None:
         ...
 
 
 class JSONIncidentRepository:
+
+    def _write_incidents(self, incidents: list[dict]) -> None:
+        temp_path = None
+
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                dir=".",
+                prefix=".incidents.",
+                suffix=".tmp",
+                delete=False
+            ) as file:
+                temp_path = file.name
+
+                json.dump(incidents, file, indent=4)
+
+                file.flush()
+                os.fsync(file.fileno())
+
+            os.replace(temp_path, "incidents.json")
+            temp_path = None
+
+        finally:
+            if temp_path is not None:
+                try:
+                    os.unlink(temp_path)
+                except FileNotFoundError:
+                    pass
+
     def save(self, incident: Incident) -> None:
         incidents = self.load()
         incidents.append(incident.to_dict())
 
-        with open("incidents.json", "w") as file:
-            json.dump(incidents, file, indent=4)
+        self._write_incidents(incidents)
 
     def load(self) -> list[dict]:
         try:
             with open("incidents.json", "r") as file:
                 incidents = json.load(file)
+
         except FileNotFoundError:
             return []
 
@@ -39,7 +72,6 @@ class JSONIncidentRepository:
 
         return incidents
 
-    
     def get_by_id(self, incident_id: str) -> Incident | None:
         incidents = self.load()
 
@@ -64,7 +96,7 @@ class JSONIncidentRepository:
                 return incident
 
         return None
-    
+
     def update(self, incident_id: str, updates: dict) -> None:
         incidents = self.load()
 
@@ -73,11 +105,4 @@ class JSONIncidentRepository:
                 incident.update(updates)
                 break
 
-        with open("incidents.json", "w") as file:
-            json.dump(
-                incidents,
-                file,
-                indent=4
-            )
-            
-    
+        self._write_incidents(incidents)
