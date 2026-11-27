@@ -1,18 +1,15 @@
-
-
 import json
 import os
 import tempfile
 from contextlib import contextmanager
-from exceptions import RepositoryDataError
 from pathlib import Path
 from threading import RLock
 from typing import Iterator, Protocol
 
 import portalocker
 
+from exceptions import RepositoryDataError
 from incident import Incident
-
 
 class IncidentRepository(Protocol):
     def save(self, incident: Incident) -> None:
@@ -26,8 +23,23 @@ class IncidentRepository(Protocol):
 
     def update(self, incident_id: str, updates: dict) -> None:
         ...
-        ...
+
+
 _REPOSITORY_THREAD_LOCK = RLock()
+
+VALID_STATUSES = {
+    "Open",
+    "Investigating",
+    "Resolved"
+}
+
+ALLOWED_UPDATE_FIELDS = {
+    "status",
+    "resolved_by",
+    "resolution_notes",
+    "resolved_at"
+}
+
 
 @contextmanager
 def _repository_lock() -> Iterator[None]:
@@ -42,6 +54,7 @@ def _repository_lock() -> Iterator[None]:
             fail_when_locked=False
         ):
             yield
+
 
 class JSONIncidentRepository:
 
@@ -125,19 +138,41 @@ class JSONIncidentRepository:
         return None
 
     def update(self, incident_id: str, updates: dict) -> None:
+
+        if not isinstance(updates, dict):
+            raise ValueError("Updates must be a dictionary.")
+
+        if not updates:
+            raise ValueError("Updates cannot be empty.")
+
+        forbidden_fields = set(updates) - ALLOWED_UPDATE_FIELDS
+
+        if forbidden_fields:
+            raise ValueError(
+                f"Updates contain forbidden fields: "
+                f"{sorted(forbidden_fields)}"
+            )
+
         with _repository_lock():
             incidents = self.load()
 
             for incident in incidents:
                 if incident["id"] == incident_id:
-                    incident.update(updates)
-                    break
 
-            self._write_incidents(incidents)
+                    incident.update(updates)
+
+                    self._validate_incidents(incidents)
+
+                    self._write_incidents(incidents)
+                    return
+
+            raise ValueError(
+                f"Incident {incident_id} not found."
+            )
 
     def _validate_incidents(self, incidents: object) -> list[dict]:
 
-    # Support a legacy database containing a single incident.
+        # Support a legacy database containing a single incident.
         if isinstance(incidents, dict):
             incidents = [incidents]
 
@@ -217,5 +252,11 @@ class JSONIncidentRepository:
                     raise RepositoryDataError(
                         f"Incident at index {index} has an invalid '{field}' value."
                     )
+
+            # Validate allowed incident statuses.
+            if incident.get("status", "Open") not in VALID_STATUSES:
+                raise RepositoryDataError(
+                    f"Incident at index {index} has an invalid status."
+                )
 
         return incidents

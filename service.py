@@ -106,7 +106,12 @@ class AegisService:
 
         self.repository.update(
             incident_id,
-            incident.to_dict()
+            {
+                "status": incident.status,
+                "resolved_by": incident.resolved_by,
+                "resolution_notes": incident.resolution_notes,
+                "resolved_at": incident.resolved_at
+            }
         )
 
         return incident

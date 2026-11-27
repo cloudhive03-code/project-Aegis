@@ -649,3 +649,141 @@ def test_repository_rejects_corrupted_json_without_modifying_file(
     )
 
     assert saved_content == corrupted_content
+
+
+def test_repository_allows_lifecycle_updates(tmp_path, monkeypatch):
+    incident = Incident(
+        "INC-100",
+        "2026-11-27 10:00:00",
+        "WARNING",
+        "admin",
+        "192.168.1.10"
+    )
+
+    repository = JSONIncidentRepository()
+    monkeypatch.chdir(tmp_path)
+    incident.update_status("Investigating")
+    repository.save(incident)
+
+    repository.update(
+        "INC-100",
+        {
+            "status": "Resolved",
+            "resolved_by": "analyst1",
+            "resolution_notes": "Investigation completed",
+            "resolved_at": "2026-11-27 10:30:00"
+        }
+    )
+
+    result = repository.get_by_id("INC-100")
+
+    assert result is not None
+    assert result.status == "Resolved"
+    assert result.resolved_by == "analyst1"
+    assert result.resolution_notes == "Investigation completed"
+    assert result.resolved_at == "2026-11-27 10:30:00"
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("id", "INC-999"),
+        ("time", "2026-11-28 10:00:00"),
+        ("severity", "CRITICAL"),
+        ("user", "another_user"),
+        ("ip", "10.0.0.1"),
+        ("score", 100),
+        ("notes", ["Modified"]),
+        ("action", "Escalate"),
+        ("unknown_field", "unexpected")
+    ]
+)
+def test_repository_rejects_forbidden_update_fields(
+    tmp_path,
+    monkeypatch,
+    field,
+    value
+):
+    incident = Incident(
+        "INC-101",
+        "2026-11-27 10:00:00",
+        "WARNING",
+        "admin",
+        "192.168.1.10"
+    )
+
+    repository = JSONIncidentRepository()
+    monkeypatch.chdir(tmp_path)
+    repository.save(incident)
+
+    with pytest.raises(ValueError):
+        repository.update("INC-101", {field: value})
+
+    result = repository.get_by_id("INC-101")
+
+    assert result is not None
+    assert result.id == "INC-101"
+    assert result.user == "admin"
+    assert result.ip == "192.168.1.10"
+    assert result.score == incident.score
+
+
+@pytest.mark.parametrize(
+    "status",
+    ["Unknown", "Closed", "Pending"]
+)
+def test_repository_rejects_invalid_status_updates(
+    tmp_path,
+    monkeypatch,
+    status
+):
+    incident = Incident(
+        "INC-102",
+        "2026-11-27 10:00:00",
+        "WARNING",
+        "admin",
+        "192.168.1.10"
+    )
+
+    repository = JSONIncidentRepository()
+    monkeypatch.chdir(tmp_path)
+    repository.save(incident)
+
+    with pytest.raises(RepositoryDataError):
+        repository.update("INC-102", {"status": status})
+
+    result = repository.get_by_id("INC-102")
+
+    assert result is not None
+    assert result.status == "Open"
+
+
+def test_repository_raises_for_missing_incident_update(
+    tmp_path,
+    monkeypatch
+):
+    repository = JSONIncidentRepository()
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(ValueError, match="not found"):
+        repository.update("INC-999", {"status": "Investigating"})
+
+
+def test_repository_rejects_empty_updates(
+    tmp_path,
+    monkeypatch
+):
+    incident = Incident(
+        "INC-103",
+        "2026-11-27 10:00:00",
+        "WARNING",
+        "admin",
+        "192.168.1.10"
+    )
+
+    repository = JSONIncidentRepository()
+    monkeypatch.chdir(tmp_path)
+    repository.save(incident)
+
+    with pytest.raises(ValueError, match="empty"):
+        repository.update("INC-103", {})
