@@ -18,8 +18,10 @@ env/
 .env.*
 !.env.example
 
+
 # Local incident and log data
 incidents.json
+incidents.json.lock
 security.log
 
 # Editor and operating system files

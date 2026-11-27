@@ -2,8 +2,13 @@
 import json
 import repos
 from incident import Incident
+import multiprocessing
+import os
+import portalocker
+from concurrent.futures import ProcessPoolExecutor
 import pytest
 from repos import JSONIncidentRepository
+from concurrent.futures import ThreadPoolExecutor
 
 def test_json_repository_preserves_multiple_incidents(tmp_path, monkeypatch):
     incident_1 = Incident(
@@ -384,3 +389,238 @@ def test_repository_preserves_original_file_when_replace_fails(
 
     temporary_files = list(tmp_path.glob(".incidents.*.tmp"))
     assert temporary_files == []
+
+def _save_incident_in_process(directory, number):
+    os.chdir(directory)
+
+    repository = JSONIncidentRepository()
+
+    incident = Incident(
+        f"INC-{number:03}",
+        "2026-08-30 04:00:00",
+        "WARNING",
+        "admin",
+        "192.168.1.160"
+    )
+
+    repository.save(incident)
+
+    return incident.id
+
+def test_repository_preserves_incidents_from_concurrent_threads(
+    tmp_path,
+    monkeypatch
+):
+    monkeypatch.chdir(tmp_path)
+
+    incident_count = 40
+
+    def save_incident(number):
+        repository = JSONIncidentRepository()
+
+        incident = Incident(
+            f"INC-{number:03}",
+            "2026-08-30 03:00:00",
+            "WARNING",
+            "admin",
+            "192.168.1.150"
+        )
+
+        repository.save(incident)
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        list(executor.map(save_incident, range(incident_count)))
+
+    repository = JSONIncidentRepository()
+    saved_incidents = repository.load()
+
+    assert len(saved_incidents) == incident_count
+
+    saved_ids = {incident["id"] for incident in saved_incidents}
+
+    assert len(saved_ids) == incident_count
+
+def test_repository_preserves_incidents_from_concurrent_processes(
+    tmp_path
+):
+    incident_count = 40
+
+    context = multiprocessing.get_context("spawn")
+
+    with ProcessPoolExecutor(
+        max_workers=4,
+        mp_context=context
+    ) as executor:
+        saved_ids = list(
+            executor.map(
+                _save_incident_in_process,
+                [str(tmp_path)] * incident_count,
+                range(incident_count)
+            )
+        )
+
+    repository = JSONIncidentRepository()
+
+    # Read the file from the test directory.
+    original_directory = os.getcwd()
+
+    try:
+        os.chdir(tmp_path)
+        saved_incidents = repository.load()
+    finally:
+        os.chdir(original_directory)
+
+    assert len(saved_incidents) == incident_count
+    assert len(saved_ids) == incident_count
+    assert len(set(saved_ids)) == incident_count
+
+    stored_ids = {
+        incident["id"] for incident in saved_incidents
+    }
+
+    assert stored_ids == set(saved_ids)
+
+
+def test_repository_handles_missing_temp_file_during_cleanup(
+    tmp_path,
+    monkeypatch
+):
+    repository = JSONIncidentRepository()
+    monkeypatch.chdir(tmp_path)
+
+    original_incident = Incident(
+        "INC-040",
+        "2026-08-30 05:00:00",
+        "WARNING",
+        "admin",
+        "192.168.1.170"
+    )
+
+    repository.save(original_incident)
+
+    original_content = (tmp_path / "incidents.json").read_text(
+        encoding="utf-8"
+    )
+
+    def remove_temp_then_fail(source, destination):
+        os.unlink(source)
+        raise OSError("Simulated replacement failure")
+
+    monkeypatch.setattr(
+        repos.os,
+        "replace",
+        remove_temp_then_fail
+    )
+
+    with pytest.raises(OSError, match="Simulated replacement failure"):
+        repository.save(
+            Incident(
+                "INC-041",
+                "2026-08-30 05:05:00",
+                "CRITICAL",
+                "root",
+                "192.168.1.180"
+            )
+        )
+
+    saved_content = (tmp_path / "incidents.json").read_text(
+        encoding="utf-8"
+    )
+
+    assert saved_content == original_content
+
+    temporary_files = list(tmp_path.glob(".incidents.*.tmp"))
+    assert temporary_files == []
+
+def _hold_repository_file_lock(directory, lock_acquired, release_lock):
+    os.chdir(directory)
+
+    with portalocker.Lock("incidents.json.lock", mode="a"):
+        lock_acquired.set()
+        release_lock.wait(timeout=10)
+
+def test_repository_raises_when_lock_timeout_expires(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+
+    context = multiprocessing.get_context("spawn")
+    lock_acquired = context.Event()
+    release_lock = context.Event()
+
+    process = context.Process(
+        target=_hold_repository_file_lock,
+        args=(str(tmp_path), lock_acquired, release_lock)
+    )
+
+    process.start()
+
+    try:
+        assert lock_acquired.wait(timeout=5)
+
+        repository = JSONIncidentRepository()
+
+        incident = Incident(
+            "INC-050",
+            "2026-08-30 06:00:00",
+            "WARNING",
+            "admin",
+            "192.168.1.190"
+        )
+
+        with pytest.raises(portalocker.AlreadyLocked):
+            repository.save(incident)
+
+    finally:
+        release_lock.set()
+        process.join(timeout=5)
+
+        if process.is_alive():
+            process.terminate()
+            process.join()
+
+    assert process.exitcode == 0
+
+
+def test_repository_releases_lock_after_write_failure(
+    tmp_path,
+    monkeypatch
+):
+    monkeypatch.chdir(tmp_path)
+
+    repository = JSONIncidentRepository()
+
+    incident = Incident(
+        "INC-051",
+        "2026-08-30 06:10:00",
+        "WARNING",
+        "admin",
+        "192.168.1.191"
+    )
+
+    original_write = repository._write_incidents
+
+    def simulate_write_failure(incidents):
+        raise OSError("Simulated write failure")
+
+    monkeypatch.setattr(
+        repository,
+        "_write_incidents",
+        simulate_write_failure
+    )
+
+    with pytest.raises(OSError, match="Simulated write failure"):
+        repository.save(incident)
+
+    # Restore the original write method without resetting the directory.
+    monkeypatch.setattr(
+        repository,
+        "_write_incidents",
+        original_write
+    )
+
+    # Verify that the repository can acquire the lock again.
+    repository.save(incident)
+
+    saved_incidents = repository.load()
+
+    assert len(saved_incidents) == 1
+    assert saved_incidents[0]["id"] == "INC-051"

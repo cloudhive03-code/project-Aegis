@@ -3,7 +3,12 @@
 import json
 import os
 import tempfile
-from typing import Protocol
+from contextlib import contextmanager
+from pathlib import Path
+from threading import RLock
+from typing import Iterator, Protocol
+
+import portalocker
 
 from incident import Incident
 
@@ -20,7 +25,21 @@ class IncidentRepository(Protocol):
 
     def update(self, incident_id: str, updates: dict) -> None:
         ...
+_REPOSITORY_THREAD_LOCK = RLock()
 
+@contextmanager
+def _repository_lock() -> Iterator[None]:
+    lock_path = Path("incidents.json.lock").resolve()
+
+    with _REPOSITORY_THREAD_LOCK:
+        with portalocker.Lock(
+            lock_path,
+            mode="a",
+            timeout=5,
+            check_interval=0.05,
+            fail_when_locked=False
+        ):
+            yield
 
 class JSONIncidentRepository:
 
@@ -54,10 +73,11 @@ class JSONIncidentRepository:
                     pass
 
     def save(self, incident: Incident) -> None:
-        incidents = self.load()
-        incidents.append(incident.to_dict())
+        with _repository_lock():
+            incidents = self.load()
+            incidents.append(incident.to_dict())
 
-        self._write_incidents(incidents)
+            self._write_incidents(incidents)
 
     def load(self) -> list[dict]:
         try:
@@ -98,11 +118,12 @@ class JSONIncidentRepository:
         return None
 
     def update(self, incident_id: str, updates: dict) -> None:
-        incidents = self.load()
+        with _repository_lock():
+            incidents = self.load()
 
-        for incident in incidents:
-            if incident["id"] == incident_id:
-                incident.update(updates)
-                break
+            for incident in incidents:
+                if incident["id"] == incident_id:
+                    incident.update(updates)
+                    break
 
-        self._write_incidents(incidents)
+            self._write_incidents(incidents)
