@@ -4,6 +4,7 @@ import json
 import os
 import tempfile
 from contextlib import contextmanager
+from exceptions import RepositoryDataError
 from pathlib import Path
 from threading import RLock
 from typing import Iterator, Protocol
@@ -24,6 +25,7 @@ class IncidentRepository(Protocol):
         ...
 
     def update(self, incident_id: str, updates: dict) -> None:
+        ...
         ...
 _REPOSITORY_THREAD_LOCK = RLock()
 
@@ -81,16 +83,21 @@ class JSONIncidentRepository:
 
     def load(self) -> list[dict]:
         try:
-            with open("incidents.json", "r") as file:
+            with open("incidents.json", "r", encoding="utf-8") as file:
                 incidents = json.load(file)
 
         except FileNotFoundError:
             return []
 
+        except json.JSONDecodeError as error:
+            raise RepositoryDataError(
+                "The incident database contains invalid JSON."
+            ) from error
+
         if isinstance(incidents, dict):
             incidents = [incidents]
 
-        return incidents
+        return self._validate_incidents(incidents)
 
     def get_by_id(self, incident_id: str) -> Incident | None:
         incidents = self.load()
@@ -127,3 +134,88 @@ class JSONIncidentRepository:
                     break
 
             self._write_incidents(incidents)
+
+    def _validate_incidents(self, incidents: object) -> list[dict]:
+
+    # Support a legacy database containing a single incident.
+        if isinstance(incidents, dict):
+            incidents = [incidents]
+
+        if not isinstance(incidents, list):
+            raise RepositoryDataError(
+                "The incident database must contain a list of incidents."
+            )
+
+        required_fields = {
+            "id": str,
+            "time": str,
+            "severity": str,
+            "user": str,
+            "ip": str,
+            "score": int,
+            "notes": list,
+            "action": str
+        }
+
+        optional_fields = {
+            "status": str,
+            "resolved_by": (str, type(None)),
+            "resolution_notes": (str, type(None)),
+            "resolved_at": (str, type(None))
+        }
+
+        for index, incident in enumerate(incidents):
+
+            # Every incident must be a dictionary.
+            if not isinstance(incident, dict):
+                raise RepositoryDataError(
+                    f"Incident at index {index} must be a dictionary."
+                )
+
+            # Normalize legacy empty-string notes BEFORE type validation.
+            if incident.get("notes") == "":
+                incident["notes"] = []
+
+            # Validate required fields.
+            for field, expected_type in required_fields.items():
+
+                if field not in incident:
+                    raise RepositoryDataError(
+                        f"Incident at index {index} is missing '{field}'."
+                    )
+
+                value = incident[field]
+
+                # Reject bool because bool is a subclass of int.
+                if field == "score":
+                    valid_type = (
+                        isinstance(value, int)
+                        and not isinstance(value, bool)
+                    )
+                else:
+                    valid_type = isinstance(value, expected_type)
+
+                if not valid_type:
+                    raise RepositoryDataError(
+                        f"Incident at index {index} has an invalid '{field}' value."
+                    )
+
+            # Validate that every note is a string.
+            if not all(
+                isinstance(note, str) for note in incident["notes"]
+            ):
+                raise RepositoryDataError(
+                    f"Incident at index {index} contains invalid notes."
+                )
+
+            # Validate optional fields.
+            for field, expected_type in optional_fields.items():
+
+                if field in incident and not isinstance(
+                    incident[field], expected_type
+                ):
+                    raise RepositoryDataError(
+                        f"Incident at index {index} has an invalid '{field}' value."
+                    )
+
+        return incidents

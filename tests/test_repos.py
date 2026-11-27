@@ -7,6 +7,7 @@ import os
 import portalocker
 from concurrent.futures import ProcessPoolExecutor
 import pytest
+from exceptions import RepositoryDataError
 from repos import JSONIncidentRepository
 from concurrent.futures import ThreadPoolExecutor
 
@@ -304,7 +305,7 @@ def test_json_repository_raises_error_for_corrupted_file(
     with open("incidents.json", "w") as file:
         file.write('{"id": "INC-001", invalid json}')
 
-    with pytest.raises(json.JSONDecodeError):
+    with pytest.raises(RepositoryDataError):
         repository.load()
 
 
@@ -328,7 +329,7 @@ def test_json_repository_does_not_overwrite_corrupted_file(
         "192.168.1.20"
     )
 
-    with pytest.raises(json.JSONDecodeError):
+    with pytest.raises(RepositoryDataError):
         repository.save(incident)
 
     with open("incidents.json", "r") as file:
@@ -624,3 +625,27 @@ def test_repository_releases_lock_after_write_failure(
 
     assert len(saved_incidents) == 1
     assert saved_incidents[0]["id"] == "INC-051"
+
+def test_repository_rejects_corrupted_json_without_modifying_file(
+    tmp_path,
+    monkeypatch
+):
+    monkeypatch.chdir(tmp_path)
+
+    repository = JSONIncidentRepository()
+
+    corrupted_content = '{"id": "INC-001", "severity": '
+
+    (tmp_path / "incidents.json").write_text(
+        corrupted_content,
+        encoding="utf-8"
+    )
+
+    with pytest.raises(RepositoryDataError):
+        repository.load()
+
+    saved_content = (tmp_path / "incidents.json").read_text(
+        encoding="utf-8"
+    )
+
+    assert saved_content == corrupted_content
