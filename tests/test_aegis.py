@@ -1,11 +1,12 @@
 
 import pytest
+
 from exceptions import LogParseError, NotificationError
 from incident import Incident
+from repos import JSONIncidentRepository
 from service import AegisService
 
 from aegis import Aegis
-
 
 class FakeRepository:
     def __init__(self):
@@ -236,6 +237,44 @@ def test_aegis_rejects_resolving_missing_incident():
             "analyst1",
             "Incident does not exist"
         )
+def test_aegis_does_not_persist_failed_resolution(
+    tmp_path,
+    monkeypatch
+):
+    monkeypatch.chdir(tmp_path)
+
+    repository = JSONIncidentRepository()
+    alert_service = FakeAlertService()
+
+    aegis = Aegis(
+        repository=repository,
+        alert_service=alert_service
+    )
+
+    incident = Incident(
+        "INC-030",
+        "2026-11-28 10:00:00",
+        "WARNING",
+        "admin",
+        "192.168.1.90"
+    )
+
+    repository.save(incident)
+
+    with pytest.raises(ValueError):
+        aegis.resolve_incident(
+            "INC-030",
+            "analyst1",
+            "Investigation completed"
+        )
+
+    result = repository.get_by_id("INC-030")
+
+    assert result is not None
+    assert result.status == "Open"
+    assert result.resolved_by is None
+    assert result.resolution_notes is None
+    assert result.resolved_at is None
         
 def test_aegis_rejects_duplicate_incident_id():
     repository = FakeRepository()
