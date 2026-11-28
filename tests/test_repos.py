@@ -787,3 +787,39 @@ def test_repository_rejects_empty_updates(
 
     with pytest.raises(ValueError, match="empty"):
         repository.update("INC-103", {})
+
+
+def test_json_repository_rejects_duplicate_incident_id(
+    tmp_path,
+    monkeypatch
+):
+    repository = JSONIncidentRepository()
+    monkeypatch.chdir(tmp_path)
+
+    incident = Incident(
+        "INC-001",
+        "2026-08-29 16:30:00",
+        "CRITICAL",
+        "admin",
+        "192.168.1.20"
+    )
+
+    duplicate = Incident(
+        "INC-001",
+        "2026-08-29 17:00:00",
+        "WARNING",
+        "jsmith",
+        "192.168.1.50"
+    )
+
+    repository.save(incident)
+
+    with pytest.raises(ValueError):
+        repository.save(duplicate)
+
+    saved_incidents = repository.load()
+
+    assert len(saved_incidents) == 1
+    assert saved_incidents[0]["id"] == "INC-001"
+    assert saved_incidents[0]["severity"] == "CRITICAL"
+    assert saved_incidents[0]["user"] == "admin"

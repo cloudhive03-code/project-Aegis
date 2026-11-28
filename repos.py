@@ -90,9 +90,19 @@ class JSONIncidentRepository:
     def save(self, incident: Incident) -> None:
         with _repository_lock():
             incidents = self.load()
-            incidents.append(incident.to_dict())
 
+            # Reject duplicate incident IDs.
+            if any(
+                existing["id"] == incident.id
+                for existing in incidents
+            ):
+                raise ValueError(
+                    f"Incident with ID {incident.id!r} already exists."
+                )
+
+            incidents.append(incident.to_dict())
             self._write_incidents(incidents)
+
 
     def load(self) -> list[dict]:
         try:
