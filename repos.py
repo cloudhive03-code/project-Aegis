@@ -100,7 +100,10 @@ class JSONIncidentRepository:
                     f"Incident with ID {incident.id!r} already exists."
                 )
 
-            incidents.append(incident.to_dict())
+            incident_data = incident.to_dict()
+            incident_data["version"] = 1
+
+            incidents.append(incident_data)
             self._write_incidents(incidents)
 
 
@@ -172,6 +175,7 @@ class JSONIncidentRepository:
                     incident.update(updates)
 
                     self._validate_incidents(incidents)
+                    incident["version"] += 1
 
                     self._write_incidents(incidents)
                     return
@@ -223,6 +227,21 @@ class JSONIncidentRepository:
 
             # Validate required fields.
             for field, expected_type in required_fields.items():
+                # Normalize legacy records without version metadata.
+                if "version" not in incident:
+                    incident["version"] = 1
+
+                # Validate repository version metadata.
+                version = incident["version"]
+
+                if (
+                    not isinstance(version, int)
+                    or isinstance(version, bool)
+                    or version < 1
+                ):
+                    raise RepositoryDataError(
+                        f"Incident at index {index} has an invalid 'version' value."
+                    )
 
                 if field not in incident:
                     raise RepositoryDataError(

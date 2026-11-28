@@ -823,3 +823,159 @@ def test_json_repository_rejects_duplicate_incident_id(
     assert saved_incidents[0]["id"] == "INC-001"
     assert saved_incidents[0]["severity"] == "CRITICAL"
     assert saved_incidents[0]["user"] == "admin"
+
+def test_json_repository_saves_new_incident_at_version_one(
+    tmp_path,
+    monkeypatch
+):
+    monkeypatch.chdir(tmp_path)
+
+    repository = JSONIncidentRepository()
+
+    incident = Incident(
+        "INC-200",
+        "2026-11-28 12:00:00",
+        "WARNING",
+        "admin",
+        "192.168.1.20"
+    )
+
+    repository.save(incident)
+
+    saved_data = json.loads(
+        (tmp_path / "incidents.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    assert saved_data[0]["version"] == 1
+
+
+def test_repository_increments_version_after_updates(
+    tmp_path,
+    monkeypatch
+):
+    monkeypatch.chdir(tmp_path)
+    repository = JSONIncidentRepository()
+
+    incident = Incident(
+        "INC-201",
+        "2026-11-28 12:00:00",
+        "WARNING",
+        "admin",
+        "192.168.1.20"
+    )
+
+    repository.save(incident)
+
+    repository.update(
+        "INC-201",
+        {"status": "Investigating"}
+    )
+
+    repository.update(
+        "INC-201",
+        {"status": "Resolved"}
+    )
+
+    saved_data = repository.load()
+
+    assert saved_data[0]["version"] == 3
+
+
+def test_repository_preserves_version_after_failed_update(
+    tmp_path,
+    monkeypatch
+):
+    monkeypatch.chdir(tmp_path)
+    repository = JSONIncidentRepository()
+
+    incident = Incident(
+        "INC-202",
+        "2026-11-28 12:00:00",
+        "WARNING",
+        "admin",
+        "192.168.1.20"
+    )
+
+    repository.save(incident)
+
+    with pytest.raises(RepositoryDataError):
+        repository.update(
+            "INC-202",
+            {"status": "Unknown"}
+        )
+
+    assert repository.load()[0]["version"] == 1
+
+
+def test_repository_normalizes_legacy_version(
+    tmp_path,
+    monkeypatch
+):
+    monkeypatch.chdir(tmp_path)
+    repository = JSONIncidentRepository()
+
+    incident = Incident(
+        "INC-203",
+        "2026-11-28 12:00:00",
+        "WARNING",
+        "admin",
+        "192.168.1.20"
+    )
+
+    repository.save(incident)
+
+    database = json.loads(
+        (tmp_path / "incidents.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    database[0].pop("version")
+
+    (tmp_path / "incidents.json").write_text(
+        json.dumps(database),
+        encoding="utf-8"
+    )
+
+    assert repository.load()[0]["version"] == 1
+
+
+@pytest.mark.parametrize(
+    "version",
+    [0, -1, True, "1", 1.5, None]
+)
+def test_repository_rejects_invalid_versions(
+    tmp_path,
+    monkeypatch,
+    version
+):
+    monkeypatch.chdir(tmp_path)
+    repository = JSONIncidentRepository()
+
+    incident = Incident(
+        "INC-204",
+        "2026-11-28 12:00:00",
+        "WARNING",
+        "admin",
+        "192.168.1.20"
+    )
+
+    repository.save(incident)
+
+    database = json.loads(
+        (tmp_path / "incidents.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    database[0]["version"] = version
+
+    (tmp_path / "incidents.json").write_text(
+        json.dumps(database),
+        encoding="utf-8"
+    )
+
+    with pytest.raises(RepositoryDataError):
+        repository.load()
